@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -73,10 +74,15 @@ def aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class FakeQueue:
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self.batches: list[list[dict[str, str]]] = []
 
-    def send_messages(self, Entries: list[dict[str, str]]) -> None:
-        self.batches.append(Entries)
+    def send_message_batch(
+        self, QueueUrl: str, Entries: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        with self._lock:
+            self.batches.append(Entries)
+        return {}
 
     @property
     def bodies(self) -> list[dict[str, Any]]:
@@ -86,7 +92,7 @@ class FakeQueue:
 @pytest.fixture
 def fake_queue(monkeypatch: pytest.MonkeyPatch) -> FakeQueue:
     queue = FakeQueue()
-    monkeypatch.setattr(task_module, "queue", queue)
+    monkeypatch.setattr(task_module, "sqs", queue)
     return queue
 
 
@@ -138,10 +144,11 @@ def test_queue_payloads_batches_messages(fake_queue: FakeQueue) -> None:
 
     queue_payloads(frames, "upload-bucket", batch_size=4)
 
-    assert [len(batch) for batch in fake_queue.batches] == [4, 2]
-    assert [body["metadata_href"] for body in fake_queue.bodies] == [
+    # Batches are sent concurrently, so only their contents are deterministic.
+    assert sorted(len(batch) for batch in fake_queue.batches) == [2, 4]
+    assert sorted(body["metadata_href"] for body in fake_queue.bodies) == sorted(
         record["metadata_s3_uri"] for record in EXPECTED_RECORDS
-    ]
+    )
 
 
 def get_test_cases() -> list[tuple[Path, Path, bool]]:

@@ -2,6 +2,7 @@ import logging
 import os
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from itertools import batched
 from typing import Any
 from urllib.parse import urlparse
@@ -9,17 +10,32 @@ from urllib.parse import urlparse
 import boto3
 import orjson as json
 import polars as pl
+from botocore.config import Config
 from stactask import Task
 
 logging.getLogger().setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
-queue_url = os.getenv("SQS_QUEUE_URL")
-queue = None if not queue_url else boto3.resource("sqs").Queue(queue_url)
-
 # Rows buffered per streamed polars chunk.
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "5000"))
 SQS_BATCH_SIZE = 10
+# In-flight SendMessageBatch calls. Sending serially is bound by round-trip
+# latency (~13ms), not by SQS throughput.
+SQS_CONCURRENCY = int(os.getenv("SQS_CONCURRENCY", "32"))
 WORKFLOW_NAME = os.getenv("WORKFLOW_NAME", "sentinel-2-c1-l2a")
+
+queue_url = os.getenv("SQS_QUEUE_URL")
+# A client rather than a resource: boto3 resources are not thread safe.
+sqs = (
+    None
+    if not queue_url
+    else boto3.client(
+        "sqs",
+        config=Config(
+            max_pool_connections=SQS_CONCURRENCY,
+            retries={"max_attempts": 10, "mode": "standard"},
+        ),
+    )
+)
 
 
 def get_parquet_uris_from_prefix(prefix_uri: str) -> list[str]:
@@ -40,15 +56,15 @@ def get_parquet_uris_from_prefix(prefix_uri: str) -> list[str]:
     ]
 
 
-def get_records_from_geoparquet(
-    geoparquet_uris: list[str],
+def build_records_frame(
+    geoparquet_uri: str,
     min_processing_baseline: str | None,
     max_processing_baseline: str | None,
     exclude_processing_baseline: str | None,
     limit: int | None,
-) -> Iterator[pl.DataFrame]:
+) -> pl.LazyFrame:
     """Scans STAC geoparquet, resolving each granule_metadata asset to an S3 URI."""
-    df = pl.scan_parquet(geoparquet_uris)
+    df = pl.scan_parquet(geoparquet_uri)
 
     if min_processing_baseline:
         df = df.filter(pl.col("s2:processing_baseline") >= min_processing_baseline)
@@ -78,20 +94,51 @@ def get_records_from_geoparquet(
     if limit is not None:
         records_df = records_df.head(limit)
 
-    return records_df.collect_batches(engine="streaming", chunk_size=CHUNK_SIZE)
+    return records_df
 
 
-def queue_payloads(
+def get_records_from_geoparquet(
+    geoparquet_uris: list[str],
+    min_processing_baseline: str | None,
+    max_processing_baseline: str | None,
+    exclude_processing_baseline: str | None,
+    limit: int | None,
+) -> Iterator[pl.DataFrame]:
+    """Yields record chunks, scanning one part file at a time.
+
+    A single multi-file `scan_parquet` decodes a row group of the large nested
+    `assets` column from every part file concurrently, so the pushed-down slice
+    still pays the decode cost of files it never emits rows from (~20x slower
+    for a 50k limit over 60 part files).
+    """
+    remaining = limit
+    for uri in geoparquet_uris:
+        if remaining is not None and remaining <= 0:
+            return
+
+        records_df = build_records_frame(
+            uri,
+            min_processing_baseline,
+            max_processing_baseline,
+            exclude_processing_baseline,
+            remaining,
+        )
+        for frame in records_df.collect_batches(
+            engine="streaming", chunk_size=CHUNK_SIZE, lazy=True
+        ):
+            yield frame
+            if remaining is not None:
+                remaining -= frame.height
+
+
+def iter_sqs_entries(
     frames: Iterator[pl.DataFrame],
     upload_bucket: str,
-    batch_size: int = SQS_BATCH_SIZE,
-) -> None:
-    """Sends one streamed chunk at a time so only that chunk is held in memory."""
-    total = 0
-    b = 0
+    batch_size: int,
+) -> Iterator[list[dict[str, str]]]:
+    """Yields SendMessageBatch entries one streamed chunk at a time."""
     for frame in frames:
         for group in batched(frame.iter_rows(named=True), batch_size):
-            b += 1
             entries = []
             for record in group:
                 # orjson.dumps returns bytes; SQS MessageBody requires str
@@ -100,12 +147,45 @@ def queue_payloads(
                 )
                 logging.debug(f"Submitting payload: {body}")
                 entries.append({"Id": str(uuid.uuid4()), "MessageBody": body})
+            yield entries
 
+
+def send_entries(entries: list[dict[str, str]]) -> None:
+    if not sqs:
+        return
+    failed = sqs.send_message_batch(QueueUrl=queue_url, Entries=entries).get("Failed")
+    if failed:
+        logging.error(
+            f"SQS rejected {len(failed)} of {len(entries)} messages: {failed}"
+        )
+
+
+def queue_payloads(
+    frames: Iterator[pl.DataFrame],
+    upload_bucket: str,
+    batch_size: int = SQS_BATCH_SIZE,
+) -> None:
+    """Sends batches concurrently, keeping at most SQS_CONCURRENCY in flight."""
+    total = 0
+    b = 0
+    pending: set[Future[None]] = set()
+
+    with ThreadPoolExecutor(max_workers=SQS_CONCURRENCY) as pool:
+        for entries in iter_sqs_entries(frames, upload_bucket, batch_size):
+            b += 1
             total += len(entries)
-            if queue:
-                queue.send_messages(Entries=entries)
+
+            if len(pending) >= SQS_CONCURRENCY:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    future.result()
+
+            pending.add(pool.submit(send_entries, entries))
             if (b % 100) == 0:
                 logging.info(f"Queued {b} batches")
+
+        for future in pending:
+            future.result()
 
     logging.info(f"Queued {total} total Cirrus payloads.")
 
