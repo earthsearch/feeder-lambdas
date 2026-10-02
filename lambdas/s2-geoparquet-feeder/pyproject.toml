@@ -1,0 +1,21 @@
+[project]
+name = "s2-geoparquet-feeder"
+version = "0.1.0"
+description = "TODO: describe this lambda"
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["stac", "workflow", "cirrus"]
+license = { text = "Apache-2.0" }
+dependencies = [
+    "boto3>=1.40.0",
+    "orjson>=3.10.0",
+    "polars>=1.33.0",
+    "stactask>=0.7.0",
+]
+
+[project.scripts]
+s2-geoparquet-feeder = "s2_geoparquet_feeder.task:S2GeoparquetFeeder.cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

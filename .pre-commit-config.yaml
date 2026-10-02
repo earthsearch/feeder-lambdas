@@ -12,15 +12,24 @@ repos:
       - id: check-merge-conflict
       - id: detect-aws-credentials
       - id: end-of-file-fixer
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.15.0
+  # mypy runs from the uv workspace env so the lambdas' dependencies are importable, and
+  # `template/` is checked separately because its `tests` package name collides with every
+  # lambda's own `tests` package in a single invocation.
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies:
-          - pytest
-          - types-requests
+        name: mypy
+        entry: uv run --all-packages mypy lambdas scripts
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: mypy-template
+        name: mypy (template)
+        entry: uv run --all-packages mypy template
+        language: system
+        types: [python]
+        pass_filenames: false
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.9
+    rev: v0.16.10
     hooks:
       - id: ruff
-

@@ -1,8 +1,11 @@
+# Workspace root only: shared tool config and dev tooling for all lambdas in lambdas/*.
+# Each lambda is its own independently buildable/deployable package - see template/ and
+# scripts/new_lambda.py.
 [project]
-name = "cirrus-task-example"
+name = "feeder-lambdas"
 version = "0.1.0"
-authors = [{ name = "Matthew Hanson", email = "matt.a.hanson@gmail.com" }]
-description = "An example Cirrus task that can be used as a template"
+authors = [{ name = "Element84", email = "opendata@element84.com" }]
+description = "Feeder from stac-geoparquet for sentinel-2"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["stac", "workflow", "cirrus"]
@@ -12,35 +15,39 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13"
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14"
 ]
-dependencies = [
-    "stactask>=0.6.1",
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["lambdas/*"]
+
+[dependency-groups]
+dev = [
+    "moto[s3,sqs]>=5.1.0",
+    "mypy>=1.18.2",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
 ]
-
-[project.scripts]
-cirrus-task-example = "cirrus_task_example.task:CirrusTaskExample.cli"
-
 
 [tool.mypy]
 show_error_codes = true
 strict = true
 warn_unused_ignores = true
 
+[[tool.mypy.overrides]]
+module = ["boto3.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
+testpaths = ["lambdas"]
+addopts = ["--import-mode=importlib"]
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
 lint.select = ["F", "E", "W", "I", "ERA", "RUF"]
-
-[tool.uv]
-dev-dependencies = [
-    "mypy>=1.15.0",
-    "pre-commit>=4.1.0",
-    "pytest>=8.3.5",
-    "ruff>=0.9.9",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
