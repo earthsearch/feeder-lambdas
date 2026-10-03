@@ -2062,8 +2062,7 @@ name = "s2-geoparquet-feeder"
 version = "0.1.0"
 source = { editable = "lambdas/s2-geoparquet-feeder" }
 dependencies = [
-    { name = "boto3" },
-    { name = "botocore" },
+    { name = "aiobotocore" },
     { name = "orjson" },
     { name = "polars" },
     { name = "stactask" },
@@ -2071,8 +2070,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", specifier = ">=1.40.0" },
-    { name = "botocore", specifier = ">=1.40.0" },
+    { name = "aiobotocore", specifier = ">=2.24.0" },
     { name = "orjson", specifier = ">=3.10.0" },
     { name = "polars", specifier = ">=1.33.0" },
     { name = "stactask", specifier = ">=0.7.0" },

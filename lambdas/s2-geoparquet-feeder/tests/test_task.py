@@ -1,6 +1,7 @@
 import json
 import os
-import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -58,14 +59,12 @@ def _clear_task_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class FakeQueue:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
         self.batches: list[list[dict[str, str]]] = []
 
-    def send_message_batch(
+    async def send_message_batch(
         self, QueueUrl: str, Entries: list[dict[str, str]]
     ) -> dict[str, Any]:
-        with self._lock:
-            self.batches.append(Entries)
+        self.batches.append(Entries)
         return {}
 
     @property
@@ -76,7 +75,12 @@ class FakeQueue:
 @pytest.fixture
 def fake_queue(monkeypatch: pytest.MonkeyPatch) -> FakeQueue:
     queue = FakeQueue()
-    monkeypatch.setattr(task_module, "sqs", queue)
+
+    @asynccontextmanager
+    async def fake_client() -> AsyncIterator[FakeQueue]:
+        yield queue
+
+    monkeypatch.setattr(task_module, "sqs_client", fake_client)
     return queue
 
 

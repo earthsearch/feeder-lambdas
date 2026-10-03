@@ -1,15 +1,16 @@
+import asyncio
 import logging
 import os
 import uuid
-from collections.abc import Iterator
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from itertools import batched
 from typing import Any
 
-import boto3
 import orjson as json
 import polars as pl
-from botocore.config import Config
+from aiobotocore.config import AioConfig
+from aiobotocore.session import get_session
 from stactask import Task
 
 logging.getLogger().setLevel(os.getenv("LOG_LEVEL", "INFO"))
@@ -17,24 +18,14 @@ logging.getLogger().setLevel(os.getenv("LOG_LEVEL", "INFO"))
 # Rows buffered per streamed polars chunk.
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "5000"))
 SQS_BATCH_SIZE = 10
-# In-flight SendMessageBatch calls. Sending serially is bound by round-trip
-# latency (~13ms), not by SQS throughput.
-SQS_CONCURRENCY = int(os.getenv("SQS_CONCURRENCY", "32"))
+# In-flight SendMessageBatch calls. Past ~64 the send loop is bound by botocore's
+# per-request CPU (signing and serialization), not by round-trip latency.
+SQS_CONCURRENCY = int(os.getenv("SQS_CONCURRENCY", "64"))
+# Batches between progress log lines; 0 disables them.
+LOG_EVERY_N_BATCHES = int(os.getenv("LOG_EVERY_N_BATCHES", "1000"))
 WORKFLOW_NAME = os.getenv("WORKFLOW_NAME", "sentinel-2-c1-l2a")
 
 queue_url = os.getenv("SQS_QUEUE_URL")
-# A client rather than a resource: boto3 resources are not thread safe.
-sqs = (
-    None
-    if not queue_url
-    else boto3.client(
-        "sqs",
-        config=Config(
-            max_pool_connections=SQS_CONCURRENCY,
-            retries={"max_attempts": 10, "mode": "standard"},
-        ),
-    )
-)
 
 
 def build_records_frame(
@@ -93,38 +84,101 @@ def get_records_from_geoparquet(
         exclude_processing_baseline,
         limit,
     )
-    return iter(
-        records_df.collect_batches(engine="streaming", chunk_size=CHUNK_SIZE, lazy=True)
-    )
+    return iter(records_df.collect_batches(engine="streaming", chunk_size=CHUNK_SIZE))
 
 
-def iter_sqs_entries(
+def frame_to_entry_batches(
+    frame: pl.DataFrame, upload_bucket: str, batch_size: int
+) -> list[list[dict[str, str]]]:
+    """Encodes one streamed chunk into SendMessageBatch entries."""
+    groups = []
+    for group in batched(frame.iter_rows(named=True), batch_size):
+        entries = []
+        for record in group:
+            # orjson.dumps returns bytes; SQS MessageBody requires str
+            body = json.dumps(format_cirrus_payload(record, upload_bucket)).decode(
+                "utf-8"
+            )
+            # %s defers formatting; an f-string here costs ~15% of the encode phase.
+            logging.debug("Submitting payload: %s", body)
+            entries.append({"Id": str(uuid.uuid4()), "MessageBody": body})
+        groups.append(entries)
+    return groups
+
+
+async def iter_entry_batches(
     frames: Iterator[pl.DataFrame],
     upload_bucket: str,
     batch_size: int,
-) -> Iterator[list[dict[str, str]]]:
-    """Yields SendMessageBatch entries one streamed chunk at a time."""
-    for frame in frames:
-        for group in batched(frame.iter_rows(named=True), batch_size):
-            entries = []
-            for record in group:
-                # orjson.dumps returns bytes; SQS MessageBody requires str
-                body = json.dumps(format_cirrus_payload(record, upload_bucket)).decode(
-                    "utf-8"
-                )
-                logging.debug(f"Submitting payload: {body}")
-                entries.append({"Id": str(uuid.uuid4()), "MessageBody": body})
+) -> AsyncIterator[list[dict[str, str]]]:
+    """Yields entry batches, decoding and encoding each chunk off the event loop."""
+
+    def next_chunk() -> list[list[dict[str, str]]] | None:
+        frame = next(frames, None)
+        if frame is None:
+            return None
+        return frame_to_entry_batches(frame, upload_bucket, batch_size)
+
+    while (groups := await asyncio.to_thread(next_chunk)) is not None:
+        for entries in groups:
             yield entries
 
 
-def send_entries(entries: list[dict[str, str]]) -> None:
-    if not sqs:
+@asynccontextmanager
+async def sqs_client() -> AsyncIterator[Any]:
+    """Yields None when SQS_QUEUE_URL is unset, so local runs only format payloads."""
+    if not queue_url:
+        yield None
         return
-    failed = sqs.send_message_batch(QueueUrl=queue_url, Entries=entries).get("Failed")
+
+    async with get_session().create_client(
+        "sqs",
+        config=AioConfig(
+            max_pool_connections=SQS_CONCURRENCY,
+            retries={"max_attempts": 10, "mode": "standard"},
+        ),
+    ) as client:
+        yield client
+
+
+async def send_entries(client: Any, entries: list[dict[str, str]]) -> None:
+    if client is None:
+        return
+    response = await client.send_message_batch(QueueUrl=queue_url, Entries=entries)
+    failed = response.get("Failed")
     if failed:
         logging.error(
             f"SQS rejected {len(failed)} of {len(entries)} messages: {failed}"
         )
+
+
+async def send_all(
+    frames: Iterator[pl.DataFrame], upload_bucket: str, batch_size: int
+) -> None:
+    total = 0
+    b = 0
+    pending: set[asyncio.Task[None]] = set()
+
+    async with sqs_client() as client:
+        async for entries in iter_entry_batches(frames, upload_bucket, batch_size):
+            b += 1
+            total += len(entries)
+
+            if len(pending) >= SQS_CONCURRENCY:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    task.result()
+
+            pending.add(asyncio.create_task(send_entries(client, entries)))
+            if LOG_EVERY_N_BATCHES and (b % LOG_EVERY_N_BATCHES) == 0:
+                logging.info(f"Queued {b} batches ({total} payloads)")
+
+        if pending:
+            await asyncio.gather(*pending)
+
+    logging.info(f"Queued {total} total Cirrus payloads.")
 
 
 def queue_payloads(
@@ -133,28 +187,7 @@ def queue_payloads(
     batch_size: int = SQS_BATCH_SIZE,
 ) -> None:
     """Sends batches concurrently, keeping at most SQS_CONCURRENCY in flight."""
-    total = 0
-    b = 0
-    pending: set[Future[None]] = set()
-
-    with ThreadPoolExecutor(max_workers=SQS_CONCURRENCY) as pool:
-        for entries in iter_sqs_entries(frames, upload_bucket, batch_size):
-            b += 1
-            total += len(entries)
-
-            if len(pending) >= SQS_CONCURRENCY:
-                done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                for future in done:
-                    future.result()
-
-            pending.add(pool.submit(send_entries, entries))
-            if (b % 100) == 0:
-                logging.info(f"Queued {b} batches")
-
-        for future in pending:
-            future.result()
-
-    logging.info(f"Queued {total} total Cirrus payloads.")
+    asyncio.run(send_all(frames, upload_bucket, batch_size))
 
 
 def format_cirrus_payload(record: dict[str, Any], upload_bucket: str) -> dict[str, Any]:
