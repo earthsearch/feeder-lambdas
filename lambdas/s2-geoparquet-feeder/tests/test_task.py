@@ -4,16 +4,14 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import boto3
 import polars as pl
 import pytest
-from moto import mock_aws
 from s2_geoparquet_feeder import task as task_module
 from s2_geoparquet_feeder.task import (
     S2GeoparquetFeeder,
     format_cirrus_payload,
-    get_parquet_uris_from_prefix,
     get_records_from_geoparquet,
+    lambda_handler,
     queue_payloads,
 )
 
@@ -54,22 +52,8 @@ EXPECTED_RECORDS = [
 
 @pytest.fixture(autouse=True)
 def _clear_task_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in ("GEOPARQUET_PREFIX", "LIMIT"):
+    for key in ("GEOPARQUET_URI", "LIMIT"):
         monkeypatch.delenv(key, raising=False)
-
-
-@pytest.fixture
-def aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keeps moto from falling back to real credentials in the environment."""
-    for key in (
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SECURITY_TOKEN",
-        "AWS_SESSION_TOKEN",
-    ):
-        monkeypatch.setenv(key, "testing")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
-    monkeypatch.delenv("AWS_PROFILE", raising=False)
 
 
 class FakeQueue:
@@ -96,32 +80,16 @@ def fake_queue(monkeypatch: pytest.MonkeyPatch) -> FakeQueue:
     return queue
 
 
-def test_get_parquet_uris_from_prefix(aws_credentials: None) -> None:
-    with mock_aws():
-        s3 = boto3.client("s3")
-        s3.create_bucket(
-            Bucket="e84-bucket",
-            CreateBucketConfiguration={"LocationConstraint": "us-west-2"},
-        )
-        for key in ("items/_SUCCESS", "items/a.parquet", "items/nested/b.parquet"):
-            s3.put_object(Bucket="e84-bucket", Key=key, Body=b"")
-
-        assert get_parquet_uris_from_prefix("s3://e84-bucket/items/") == [
-            "s3://e84-bucket/items/a.parquet",
-            "s3://e84-bucket/items/nested/b.parquet",
-        ]
-
-
 def test_get_records_from_geoparquet_filters_and_resolves_hrefs() -> None:
     frames = get_records_from_geoparquet(
-        [GEOPARQUET_PATH], "05.00", "05.99", "05.09", None
+        GEOPARQUET_PATH, "05.00", "05.99", "05.09", None
     )
 
     assert pl.concat(list(frames)).to_dicts() == EXPECTED_RECORDS
 
 
 def test_get_records_from_geoparquet_respects_limit() -> None:
-    frames = get_records_from_geoparquet([GEOPARQUET_PATH], None, None, None, 2)
+    frames = get_records_from_geoparquet(GEOPARQUET_PATH, None, None, None, 2)
 
     assert sum(frame.height for frame in frames) == 2
 
@@ -169,6 +137,13 @@ def get_test_cases() -> list[tuple[Path, Path, bool]]:
     return test_cases
 
 
+def use_local_geoparquet(payload: dict[str, Any]) -> dict[str, Any]:
+    """Repoints a fixture payload's s3:// URI at the local parquet fixture."""
+    if "geoparquet_uri" in payload:
+        payload["geoparquet_uri"] = GEOPARQUET_PATH
+    return payload
+
+
 @pytest.mark.parametrize(
     "input_file, expected_output_file, expect_exception", get_test_cases()
 )
@@ -177,21 +152,29 @@ def test_task(
     expected_output_file: Path,
     expect_exception: bool,
     fake_queue: FakeQueue,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        task_module, "get_parquet_uris_from_prefix", lambda _prefix: [GEOPARQUET_PATH]
-    )
-    input_payload = json.loads(input_file.read_text())
+    input_payload = use_local_geoparquet(json.loads(input_file.read_text()))
 
     if expect_exception:
         expected_exception = expected_output_file.read_text().strip()
         with pytest.raises(Exception, match=expected_exception):
             S2GeoparquetFeeder.handler(payload=input_payload, upload=False)
     else:
-        expected_output = json.loads(expected_output_file.read_text())
+        expected_output = use_local_geoparquet(
+            json.loads(expected_output_file.read_text())
+        )
         actual_output = S2GeoparquetFeeder.handler(payload=input_payload, upload=False)
         assert actual_output == expected_output
         assert [body["metadata_href"] for body in fake_queue.bodies] == [
             record["metadata_s3_uri"] for record in EXPECTED_RECORDS
         ]
+
+
+def test_lambda_handler_unwraps_sqs_records(fake_queue: FakeQueue) -> None:
+    payload = {"upload_bucket": "upload-bucket", "geoparquet_uri": GEOPARQUET_PATH}
+    event = {"Records": [{"body": json.dumps(payload)}, {"body": json.dumps(payload)}]}
+
+    results = lambda_handler(event)
+
+    assert len(results) == 2
+    assert len(fake_queue.bodies) == 2 * len(EXPECTED_RECORDS)

@@ -81,3 +81,13 @@ uv run --package <your-lambda-name> pytest lambdas/<your-lambda-name>
 
 The built Docker image for each lambda should be published to a registry that is accessible
 from the Cirrus deployment. Ideally the image is in the same region as where the lambda will run.
+
+## Scripts
+
+`scripts/` holds operational helpers run from the repo root. They carry [inline script
+metadata](https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies) where they
+need dependencies, so they can be run directly or with `uv run scripts/<name>.py`.
+
+- `new_lambda.py` — scaffold a new lambda from `template/` (see above).
+- `submit_geoparquet_payloads.py` — list the geoparquet part files under an S3 prefix and
+  queue one `s2-geoparquet-feeder` payload per file. Run with `--help` for options.

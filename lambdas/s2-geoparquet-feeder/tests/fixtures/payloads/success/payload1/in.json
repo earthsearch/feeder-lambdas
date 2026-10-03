@@ -1,4 +1,4 @@
 {
   "upload_bucket": "test-upload-bucket",
-  "geoparquet_prefix": "s3://test-geoparquet-bucket/sentinel-2-c1-l2a/"
+  "geoparquet_uri": "s3://test-geoparquet-bucket/sentinel-2-c1-l2a/part-00000.parquet"
 }

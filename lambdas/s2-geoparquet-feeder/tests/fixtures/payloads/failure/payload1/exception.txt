@@ -1,1 +1,1 @@
-geoparquet_prefix is required
+geoparquet_uri is required

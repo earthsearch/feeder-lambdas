@@ -5,7 +5,6 @@ from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from itertools import batched
 from typing import Any
-from urllib.parse import urlparse
 
 import boto3
 import orjson as json
@@ -36,24 +35,6 @@ sqs = (
         ),
     )
 )
-
-
-def get_parquet_uris_from_prefix(prefix_uri: str) -> list[str]:
-    parsed = urlparse(prefix_uri)
-    bucket = parsed.netloc
-    prefix = parsed.path.lstrip("/")
-
-    logging.info(f"Listing geoparquet files under s3://{bucket}/{prefix}...")
-    s3 = boto3.client("s3")
-    paginator = s3.get_paginator("list_objects_v2")
-    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
-
-    return [
-        f"s3://{bucket}/{obj['Key']}"
-        for page in pages
-        for obj in page.get("Contents", [])
-        if obj["Key"].endswith(".parquet")
-    ]
 
 
 def build_records_frame(
@@ -98,37 +79,23 @@ def build_records_frame(
 
 
 def get_records_from_geoparquet(
-    geoparquet_uris: list[str],
+    geoparquet_uri: str,
     min_processing_baseline: str | None,
     max_processing_baseline: str | None,
     exclude_processing_baseline: str | None,
     limit: int | None,
 ) -> Iterator[pl.DataFrame]:
-    """Yields record chunks, scanning one part file at a time.
-
-    A single multi-file `scan_parquet` decodes a row group of the large nested
-    `assets` column from every part file concurrently, so the pushed-down slice
-    still pays the decode cost of files it never emits rows from (~20x slower
-    for a 50k limit over 60 part files).
-    """
-    remaining = limit
-    for uri in geoparquet_uris:
-        if remaining is not None and remaining <= 0:
-            return
-
-        records_df = build_records_frame(
-            uri,
-            min_processing_baseline,
-            max_processing_baseline,
-            exclude_processing_baseline,
-            remaining,
-        )
-        for frame in records_df.collect_batches(
-            engine="streaming", chunk_size=CHUNK_SIZE, lazy=True
-        ):
-            yield frame
-            if remaining is not None:
-                remaining -= frame.height
+    """Yields record chunks streamed from a single geoparquet part file."""
+    records_df = build_records_frame(
+        geoparquet_uri,
+        min_processing_baseline,
+        max_processing_baseline,
+        exclude_processing_baseline,
+        limit,
+    )
+    return iter(
+        records_df.collect_batches(engine="streaming", chunk_size=CHUNK_SIZE, lazy=True)
+    )
 
 
 def iter_sqs_entries(
@@ -211,8 +178,8 @@ def format_cirrus_payload(record: dict[str, Any], upload_bucket: str) -> dict[st
 class S2GeoparquetFeeder(Task):
     name = "s2-geoparquet-feeder"
     description = (
-        "Scans Sentinel-2 STAC geoparquet in S3, filters by processing "
-        "baseline, and queues Cirrus workflow payloads to SQS."
+        "Scans a single Sentinel-2 STAC geoparquet file in S3, filters by "
+        "processing baseline, and queues Cirrus workflow payloads to SQS."
     )
 
     def validate(self) -> bool:
@@ -224,11 +191,9 @@ class S2GeoparquetFeeder(Task):
         if limit is not None:
             limit = int(limit)
 
-        geoparquet_prefix = self.payload.get(
-            "geoparquet_prefix", os.getenv("GEOPARQUET_PREFIX")
-        )
-        if not geoparquet_prefix:
-            raise ValueError("geoparquet_prefix is required")
+        geoparquet_uri = self.payload.get("geoparquet_uri", os.getenv("GEOPARQUET_URI"))
+        if not geoparquet_uri:
+            raise ValueError("geoparquet_uri is required")
 
         min_processing_baseline = self.payload.get("min_processing_baseline", "05.00")
         max_processing_baseline = self.payload.get("max_processing_baseline", "05.99")
@@ -236,10 +201,9 @@ class S2GeoparquetFeeder(Task):
             "exclude_processing_baseline", "05.09"
         )
 
-        self.logger.info(f"Scanning geoparquet under: {geoparquet_prefix}")
-        geoparquet_uris = get_parquet_uris_from_prefix(geoparquet_prefix)
+        self.logger.info(f"Scanning geoparquet: {geoparquet_uri}")
         frames = get_records_from_geoparquet(
-            geoparquet_uris,
+            geoparquet_uri,
             min_processing_baseline,
             max_processing_baseline,
             exclude_processing_baseline,
@@ -253,6 +217,12 @@ class S2GeoparquetFeeder(Task):
 
 
 def lambda_handler(event: dict[str, Any], context: Any = None) -> Any:
+    """Accepts a payload directly or wrapped in an SQS event source mapping envelope."""
+    if "Records" in event:
+        return [
+            S2GeoparquetFeeder.handler(payload=json.loads(record["body"]))
+            for record in event["Records"]
+        ]
     return S2GeoparquetFeeder.handler(payload=event)
 
 
