@@ -1,0 +1,18 @@
+[project]
+name = "lambda-template"
+version = "0.1.0"
+description = "Template for a new Cirrus feeder Lambda - copy this folder to start a new lambda"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["stac", "workflow", "cirrus"]
+license = { text = "Apache-2.0" }
+dependencies = [
+    "stactask>=0.7.0",
+]
+
+[project.scripts]
+lambda-template = "lambda_template.task:LambdaTemplate.cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

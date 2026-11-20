@@ -1,0 +1,10 @@
+services:
+  task:
+    build:
+      context: ../..
+      dockerfile: lambdas/_template/Dockerfile
+    image: lambda-template:latest
+    #env_file: .env
+    volumes:
+      - ./:/task
+    entrypoint: /bin/bash

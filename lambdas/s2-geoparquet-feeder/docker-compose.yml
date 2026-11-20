@@ -1,0 +1,10 @@
+services:
+  task:
+    build:
+      context: ../..
+      dockerfile: lambdas/s2-geoparquet-feeder/Dockerfile
+    image: s2-geoparquet-feeder:latest
+    #env_file: .env
+    volumes:
+      - ./:/task
+    entrypoint: /bin/bash
