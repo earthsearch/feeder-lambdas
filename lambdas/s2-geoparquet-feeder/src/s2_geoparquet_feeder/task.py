@@ -26,6 +26,7 @@ LOG_EVERY_N_BATCHES = int(os.getenv("LOG_EVERY_N_BATCHES", "1000"))
 WORKFLOW_NAME = os.getenv("WORKFLOW_NAME", "sentinel-2-c1-l2a")
 
 queue_url = os.getenv("SQS_QUEUE_URL")
+DRY_RUN = os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
 
 
 def build_records_frame(
@@ -126,10 +127,12 @@ async def iter_entry_batches(
 
 @asynccontextmanager
 async def sqs_client() -> AsyncIterator[Any]:
-    """Yields None when SQS_QUEUE_URL is unset, so local runs only format payloads."""
-    if not queue_url:
+    """Yields None in explicit DRY_RUN mode, so local runs only format payloads."""
+    if DRY_RUN:
         yield None
         return
+    if not queue_url:
+        raise ValueError("SQS_QUEUE_URL is required (set DRY_RUN=1 to skip sending)")
 
     async with get_session().create_client(
         "sqs",
@@ -147,7 +150,7 @@ async def send_entries(client: Any, entries: list[dict[str, str]]) -> None:
     response = await client.send_message_batch(QueueUrl=queue_url, Entries=entries)
     failed = response.get("Failed")
     if failed:
-        logging.error(
+        raise RuntimeError(
             f"SQS rejected {len(failed)} of {len(entries)} messages: {failed}"
         )
 
@@ -187,6 +190,8 @@ def queue_payloads(
     batch_size: int = SQS_BATCH_SIZE,
 ) -> None:
     """Sends batches concurrently, keeping at most SQS_CONCURRENCY in flight."""
+    if not 1 <= batch_size <= SQS_BATCH_SIZE:
+        raise ValueError(f"batch_size must be between 1 and {SQS_BATCH_SIZE}")
     asyncio.run(send_all(frames, upload_bucket, batch_size))
 
 

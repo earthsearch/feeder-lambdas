@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
@@ -182,3 +183,29 @@ def test_lambda_handler_unwraps_sqs_records(fake_queue: FakeQueue) -> None:
 
     assert len(results) == 2
     assert len(fake_queue.bodies) == 2 * len(EXPECTED_RECORDS)
+
+
+@pytest.mark.parametrize("batch_size", [0, -1, 11])
+def test_queue_payloads_rejects_invalid_batch_size(batch_size: int) -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        queue_payloads(iter([]), "upload-bucket", batch_size=batch_size)
+
+
+def test_send_entries_raises_on_failed_entries() -> None:
+    class FailingClient:
+        async def send_message_batch(self, **_: Any) -> dict[str, Any]:
+            return {"Failed": [{"Id": "1"}]}
+
+    with pytest.raises(RuntimeError, match="rejected 1 of 1"):
+        asyncio.run(task_module.send_entries(FailingClient(), [{"Id": "1"}]))
+
+
+def test_missing_queue_url_requires_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(task_module, "queue_url", None)
+    monkeypatch.setattr(task_module, "DRY_RUN", False)
+    frames = iter([pl.DataFrame(EXPECTED_RECORDS)])
+    with pytest.raises(ValueError, match="SQS_QUEUE_URL"):
+        queue_payloads(frames, "upload-bucket")
+
+    monkeypatch.setattr(task_module, "DRY_RUN", True)
+    queue_payloads(iter([pl.DataFrame(EXPECTED_RECORDS)]), "upload-bucket")

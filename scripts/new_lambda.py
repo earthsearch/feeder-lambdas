@@ -8,6 +8,7 @@ Usage: scripts/new_lambda.py <lambda-name>
 (`lambda-template`, `lambda_template`, `LambdaTemplate`) replaced.
 """
 
+import keyword
 import re
 import shutil
 import sys
@@ -41,6 +42,9 @@ def main() -> None:
             f"Invalid lambda name {name!r}: use lowercase letters, digits, and "
             "hyphens, e.g. 'sentinel-fetcher'."
         )
+
+    if keyword.iskeyword(name.replace("-", "_")):
+        sys.exit(f"Invalid lambda name {name!r}: it is a Python keyword.")
 
     dest = LAMBDAS_DIR / name
     if dest.exists():

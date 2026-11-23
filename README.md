@@ -64,13 +64,13 @@ an `exception.txt` file is provided instead of an output payload.
 To run all tests:
 
 ```
-uv run pytest
+uv run --all-packages pytest
 ```
 
 To run a single lambda's tests:
 
 ```
-uv run pytest lambdas/<name>
+uv run --package <name> pytest lambdas/<name>
 ```
 
 # Versions and Releases
