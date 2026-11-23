@@ -1,0 +1,18 @@
+[project]
+name = "s2-safe-feeder"
+version = "0.1.0"
+description = "TODO: describe this lambda"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["stac", "workflow", "cirrus"]
+license = { text = "Apache-2.0" }
+dependencies = [
+    "stactask>=0.7.0",
+]
+
+[project.scripts]
+s2-safe-feeder = "s2_safe_feeder.task:S2SafeFeeder.cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "feeder-lambdas",
     "s2-geoparquet-feeder",
+    "s2-safe-feeder",
 ]
 
 [[package]]
@@ -2075,6 +2076,17 @@ requires-dist = [
     { name = "polars", specifier = ">=1.33.0" },
     { name = "stactask", specifier = ">=0.7.0" },
 ]
+
+[[package]]
+name = "s2-safe-feeder"
+version = "0.1.0"
+source = { editable = "lambdas/s2-safe-feeder" }
+dependencies = [
+    { name = "stactask" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "stactask", specifier = ">=0.7.0" }]
 
 [[package]]
 name = "s3fs"
