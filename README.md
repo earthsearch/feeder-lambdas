@@ -1,32 +1,27 @@
-# Cirrus Task Example
+# Feeder Lambdas
 
-*This repository is an example of a Cirrus task that can be used as a template. See the [DEVELOPMENT.md](DEVELOPMENT.md) file for instructions on developing a task.*
-
-**Insert Task Desription here**
+*This repository is a monorepo of Cirrus feeder Lambda functions. See the [DEVELOPMENT.md](DEVELOPMENT.md) file for
+instructions on adding a new lambda using the `template/` scaffold and `scripts/new_lambda.py`.*
 
 ## Usage
 
-To use this task in a Cirrus workflow reference the Docker location in the task configuration
-file in the Cirrus deployment repository. See [CHANGELOG.md](CHANGELOG.md) for version information.
+Each lambda lives under `lambdas/<name>/` and is built/deployed independently. To use a lambda in
+a Cirrus workflow, reference its Docker image location in the task configuration file in the
+Cirrus deployment repository. See each lambda's own CHANGELOG for version information.
 
 ```
 Docker URL
 ```
 
-Configuration parameters are available available to the task through the Cirrus process payload as `['tasks']['<taskname>']`. The following parameters are available:
-
-| Field       | Type     | Description |
-| ----------- | -------- | ----------- |
-| parameter1  | Map<string, int> | **REQUIRED** Dictionary of parameters for a series of keys |
-| option1 | float | An optional floating point parameter
-| option2 | string | An optional parameter (Default: "")  |
+Configuration parameters are available to a lambda through the Cirrus process payload as `['tasks']['<taskname>']`.
 
 ## Development
 
-Tasks can be run locally with the built-in CLI.
+Lambdas can be run locally with the built-in CLI from within the lambda's own directory, e.g.:
 
 ```
-$ uv run cirrus-task-example
+$ cd lambdas/<name>
+$ uv run <name>
 
 usage: task.py run [-h] [--logging LOGGING] [--output OUTPUT] [--workdir WORKDIR] [--save-workdir] [--skip-upload] [--skip-validation] [--upload] [--no-upload] [--validate]
                    [--no-validate] [--local]
@@ -50,7 +45,7 @@ options:
   --local            Run local mode (save-workdir = True, upload = False, workdir = 'local-output', output = 'local-output/output-payload.json') (default: False)
 ```
 
-When runing locally use the `--local` option which will store all output in a local folder called `local-output` and will
+When running locally use the `--local` option which will store all output in a local folder called `local-output` and will
 not try to upload the data files to s3.
 
 ```
@@ -59,14 +54,23 @@ $ task.py payload.json --local
 
 ## Testing
 
-This repository uses [uv](https://docs.astral.sh/uv/getting-started/installation/) and uses [pytest](https://docs.pytest.org/en/stable/) for testing.
+This repository uses [uv](https://docs.astral.sh/uv/getting-started/installation/) (as a workspace, see
+[DEVELOPMENT.md](DEVELOPMENT.md)) and uses [pytest](https://docs.pytest.org/en/stable/) for testing.
 
-The `tests/test_task.py` file contains test code to iterate through the input payloads in `fixtures`, which contains a series of input and payload files, each pair in it's own folder. For expected errors in tests an `exception.txt` file is provided intead of an output payload.
+Each lambda's `tests/test_task.py` iterates through the input payloads in its own `tests/fixtures`, which
+contains a series of input and payload files, each pair in its own folder. For expected errors in tests
+an `exception.txt` file is provided instead of an output payload.
 
-To run the tests:
+To run all tests:
 
 ```
-uv run pytest
+uv run --all-packages pytest
+```
+
+To run a single lambda's tests:
+
+```
+uv run --package <name> pytest lambdas/<name>
 ```
 
 # Versions and Releases
