@@ -2082,11 +2082,19 @@ name = "s2-safe-feeder"
 version = "0.1.0"
 source = { editable = "lambdas/s2-safe-feeder" }
 dependencies = [
+    { name = "aiobotocore" },
+    { name = "orjson" },
+    { name = "polars" },
     { name = "stactask" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "stactask", specifier = ">=0.7.0" }]
+requires-dist = [
+    { name = "aiobotocore", specifier = ">=2.24.0" },
+    { name = "orjson", specifier = ">=3.10.0" },
+    { name = "polars", specifier = ">=1.33.0" },
+    { name = "stactask", specifier = ">=0.7.0" },
+]
 
 [[package]]
 name = "s3fs"

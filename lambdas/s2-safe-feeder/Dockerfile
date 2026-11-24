@@ -2,11 +2,6 @@ FROM ghcr.io/astral-sh/uv:0.12.22 AS uv
 
 FROM public.ecr.aws/lambda/python:3.14 AS builder
 
-RUN dnf update -y && \
-  dnf install -y git libxml2-devel libxslt-devel gcc && \
-  dnf clean all && \
-  rm -rf /var/cache/dnf
-
 # Enable bytecode compilation, to improve cold-start performance.
 ENV UV_COMPILE_BYTECODE=1
 

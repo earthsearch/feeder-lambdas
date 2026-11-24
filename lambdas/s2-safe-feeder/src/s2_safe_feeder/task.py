@@ -5,7 +5,11 @@ from stactask import Task
 
 class S2SafeFeeder(Task):
     name = "s2-safe-feeder"
-    description = "TODO: describe this lambda"
+    description = (
+        "Reads one S3 Inventory part of the Sentinel-2 SAFE bucket, keeps one row "
+        "per SAFE, filters by processing baseline, and queues Cirrus workflow "
+        "payloads with safe_href to SQS."
+    )
 
     def validate(self) -> bool:
         return True

@@ -1,12 +1,15 @@
 [project]
 name = "s2-safe-feeder"
 version = "0.1.0"
-description = "TODO: describe this lambda"
+description = "Queues Cirrus safe_href payloads for the Sentinel-2 L2A SAFEs listed in one S3 Inventory part"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 keywords = ["stac", "workflow", "cirrus"]
 license = { text = "Apache-2.0" }
 dependencies = [
+    "aiobotocore>=2.24.0",
+    "orjson>=3.10.0",
+    "polars>=1.33.0",
     "stactask>=0.7.0",
 ]
 
