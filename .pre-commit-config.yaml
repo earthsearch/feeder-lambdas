@@ -12,14 +12,15 @@ repos:
       - id: check-merge-conflict
       - id: detect-aws-credentials
       - id: end-of-file-fixer
-  # mypy runs from the uv workspace env so the lambdas' dependencies are importable, and
-  # `template/` is checked separately because its `tests` package name collides with every
-  # lambda's own `tests` package in a single invocation.
+  # mypy runs from the uv workspace env so the lambdas' dependencies are importable.
+  # Every lambda and `template/` has a `tests/test_task.py`, which mypy maps to the
+  # same module name `test_task` and rejects as a duplicate in one invocation, so each
+  # lambda and `scripts/` is checked separately, and `template/` by its own hook.
   - repo: local
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run --all-packages mypy lambdas scripts
+        entry: bash -c 'rc=0; for d in lambdas/*/ scripts; do uv run --all-packages mypy "$d" || rc=1; done; exit $rc'
         language: system
         types: [python]
         pass_filenames: false
