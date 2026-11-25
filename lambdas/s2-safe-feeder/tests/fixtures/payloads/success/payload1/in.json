@@ -1,0 +1,4 @@
+{
+  "upload_bucket": "test-upload-bucket",
+  "inventory_uri": "s3://test-inventory-bucket/test-safe-bucket/primary/data/part.parquet"
+}

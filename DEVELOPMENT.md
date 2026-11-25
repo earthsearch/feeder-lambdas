@@ -91,3 +91,5 @@ need dependencies, so they can be run directly or with `uv run scripts/<name>.py
 - `new_lambda.py` — scaffold a new lambda from `template/` (see above).
 - `submit_geoparquet_payloads.py` — list the geoparquet part files under an S3 prefix and
   queue one `s2-geoparquet-feeder` payload per file. Run with `--help` for options.
+- `submit_safe_payloads.py` — read an S3 Inventory manifest of the SAFE bucket and queue one
+  `s2-safe-feeder` payload per data part it lists. Run with `--help` for options.
